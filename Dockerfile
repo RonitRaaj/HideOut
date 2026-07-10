@@ -1,12 +1,11 @@
-# Stage 1: Build the Maven application
-FROM maven:3.9.6-eclipse-temurin-17 AS build
+# Stage 1: Build the Maven application using Java 21
+FROM maven:3.9.6-eclipse-temurin-21 AS build
 WORKDIR /app
 COPY . .
-# CHANGE THIS LINE 👇 (Remove the ./ and the w)
 RUN mvn clean package -DskipTests
 
-# Stage 2: Create the lightweight runtime container
-FROM eclipse-temurin:17-jre
+# Stage 2: Create the lightweight runtime container using Java 21 JRE
+FROM eclipse-temurin:21-jre
 WORKDIR /app
 
 # Copy the compiled executable fat-jar from the build container
