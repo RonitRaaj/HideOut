@@ -1,20 +1,13 @@
-# Stage 1: Build the Maven application
 FROM maven:3.9.6-eclipse-temurin-17 AS build
 WORKDIR /app
 COPY . .
-RUN mvn clean package -DskipTests
+RUN ./mvnw clean package -DskipTests
 
-# Stage 2: Create the lightweight execution container
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 
-# Create a dedicated directory inside the container for the persistent volume drive
-RUN mkdir -p /opt/render/project/data
-
-# Copy the compiled executable fat-jar from the build container
 COPY --from=build /app/target/*.jar app.jar
 
-# Expose your custom default port fallback
 EXPOSE 8045
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
