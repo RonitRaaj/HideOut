@@ -22,7 +22,6 @@ public class GeminiService {
         this.logExtractionService = logExtractionService;
     }
 
-   
     public String getChatSummaryPipeline(String sessionId, int hours) {
 
         List<Logs> logs = logExtractionService.getLogsFromLastNHours(sessionId, hours);
@@ -33,41 +32,40 @@ public class GeminiService {
 
         StringBuilder transcriptBuilder = new StringBuilder();
         for (Logs log : logs) {
-            transcriptBuilder.append(String.format("[%s] (%s): %s\n", 
-                log.getCreatedAt().toLocalTime(), 
-                log.getSourceDevice(),            
-                log.getContent()                  
-            ));
+            transcriptBuilder.append(String.format("[%s] (%s): %s\n",
+                    log.getCreatedAt().toLocalTime(),
+                    log.getSourceDevice(),
+                    log.getContent()));
         }
 
-        String promptInstruction = 
-            "You are an AI assistant for a secure private messaging application named Hideout.\n\n" +
-            "Your task is to summarize the following chat transcript recorded over the last " + hours + " hours.\n" +
-            "Please outline the main topics discussed and key interaction dynamics based on their source devices.\n\n" +
-            "Rules:\n" +
-            "- Keep your response concise and structured.\n" +
-            "- Format everything using clean Markdown (bullet points, bold highlights).\n\n" +
-            "--- CHAT TRANSCRIPT START ---\n" + 
-            transcriptBuilder.toString() + 
-            "\n--- CHAT TRANSCRIPT END ---";
+        String promptInstruction = "You are an AI assistant for a secure private messaging application named Hideout.\n\n"
+                +
+                "Your task is to summarize the following chat transcript recorded over the last " + hours
+                + " hours.\n\n" +
+                "Rules:\n" +
+                "- Be extremely brief, punchy, and sweet.\n" +
+                "- Add a touch of playful, clever sass about what went down (or didn't go down).\n" +
+                "- Use light Markdown formatting (bullet points, bold headers).\n" +
+                "- Do not write an essay. Keep the entire response under 3-4 bullet points max.\n\n" +
+                "--- CHAT TRANSCRIPT START ---\n" +
+                transcriptBuilder.toString() +
+                "\n--- CHAT TRANSCRIPT END ---";
 
         Map<String, Object> requestPayload = Map.of(
-            "contents", List.of(
-                Map.of("parts", List.of(
-                    Map.of("text", promptInstruction)
-                ))
-            )
-        );
+                "contents", List.of(
+                        Map.of("parts", List.of(
+                                Map.of("text", promptInstruction)))));
 
         try {
-            String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=" + apiKey;
+            String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key="
+                    + apiKey;
 
             Map<String, Object> apiResponse = restClient.post()
-                .uri(apiUrl)
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(requestPayload)
-                .retrieve()
-                .body(Map.class);
+                    .uri(apiUrl)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(requestPayload)
+                    .retrieve()
+                    .body(Map.class);
 
             List<?> candidates = (List<?>) apiResponse.get("candidates");
             Map<?, ?> firstCandidate = (Map<?, ?>) candidates.get(0);
