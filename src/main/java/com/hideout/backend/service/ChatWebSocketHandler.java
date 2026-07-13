@@ -18,23 +18,21 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 @Component
 @RequiredArgsConstructor
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final LogsService logsService;
-    private final Map<String, List<WebSocketSession>> roomSessions = new ConcurrentHashMap<>();
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    private final Map<String, ScheduledFuture<?>> pendingDisconnectTasks = new ConcurrentHashMap<>();
+    // Active connection tracking
+    private final Map<String, List<WebSocketSession>> roomSessions = new ConcurrentHashMap<>();
+
+    // 👇 Centralized timestamp tracking to handle presence lazily
+    private static final Map<String, Long> userLastSeen = new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
@@ -42,24 +40,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String room = (String) session.getAttributes().get("room");
-        String pokemon = (String) session.getAttributes().get("pokemon"); // Use 'pokemon' uniformly
+        String pokemon = (String) session.getAttributes().get("pokemon");
 
         if (room != null && pokemon != null) {
             String standardRoom = room.toUpperCase().trim();
             String uniqueUserKey = standardRoom + ":" + pokemon.toLowerCase().trim();
 
-            java.util.concurrent.ScheduledFuture<?> scheduledTask = pendingDisconnectTasks.remove(uniqueUserKey);
-            boolean isRefreshing = (scheduledTask != null);
+            // 1. Check if they are already considered active in our tracking registry
+            boolean isBrandNewUser = !userLastSeen.containsKey(uniqueUserKey);
+            
+            // 2. Mark them active immediately with the current system time
+            userLastSeen.put(uniqueUserKey, System.currentTimeMillis());
 
-            if (isRefreshing) {
-                scheduledTask.cancel(false);
-                System.out.println("🔄 Intercepted and canceled exit alert for user: " + uniqueUserKey);
-            }
+            // 3. Add their network session pointer to the room
+            roomSessions.computeIfAbsent(standardRoom, k -> new CopyOnWriteArrayList<>()).add(session);
 
-            roomSessions.computeIfAbsent(standardRoom, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
-                    .add(session);
-
-            if (!isRefreshing) {
+            // 4. Only broadcast and save a JOIN message if they are completely new to the system
+            if (isBrandNewUser) {
                 LogEntry systemAlert = new LogEntry();
                 systemAlert.setType(LogType.SYSTEM);
                 systemAlert.setContent("[System] " + pokemon + " joined the hideout.");
@@ -103,41 +100,67 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String room = (String) session.getAttributes().get("room");
-        String pokemon = (String) session.getAttributes().get("pokemon");
-
-        if (room != null && pokemon != null) {
+        if (room != null) {
             String standardRoom = room.toUpperCase().trim();
-            String uniqueUserKey = standardRoom + ":" + pokemon.toLowerCase().trim();
+            List<WebSocketSession> sessions = roomSessions.get(standardRoom);
+            if (sessions != null) {
+                // 👇 CLEANUP: Simply drop the raw network handle. 
+                // Do NOT broadcast a "Left" message here—let the lazy sweeper handle it!
+                sessions.remove(session);
+            }
+        }
+    }
 
-            if (roomSessions.containsKey(standardRoom)) {
-                roomSessions.get(standardRoom).remove(session);
+    // 🔁 Runs every 10 seconds globally to sweep away dead sessions
+    @Scheduled(fixedRate = 10000)
+    public void verifyUserPresence() {
+        long now = System.currentTimeMillis();
 
-                java.util.concurrent.ScheduledFuture<?> disconnectTask = scheduler.schedule(() -> {
+        // Step A: Keep timestamps fresh for everyone who has an OPEN, active browser tab
+        roomSessions.forEach((roomCode, sessions) -> {
+            for (WebSocketSession session : sessions) {
+                String pokemon = (String) session.getAttributes().get("pokemon");
+                if (pokemon != null && session.isOpen()) {
+                    String uniqueUserKey = roomCode + ":" + pokemon.toLowerCase().trim();
+                    userLastSeen.put(uniqueUserKey, now); // Update last seen timestamp
+                }
+            }
+        });
+
+        // Step B: Sweep out users who have dropped offline and exceeded the 15-second grace period
+        userLastSeen.forEach((uniqueUserKey, lastSeenTime) -> {
+            if (now - lastSeenTime > 15000) { // Missing for more than 15 seconds
+                userLastSeen.remove(uniqueUserKey);
+
+                // Parse out values from "ROOMCODE:pokemonname"
+                String[] parts = uniqueUserKey.split(":");
+                if (parts.length == 2) {
+                    String roomCode = parts[0];
+                    String rawPokemonName = parts[1];
+
+                    // Capitalize first letter beautifully for the system message display
+                    String formattedName = rawPokemonName.substring(0, 1).toUpperCase() + rawPokemonName.substring(1);
+
+                    LogEntry systemAlert = new LogEntry();
+                    systemAlert.setType(LogType.SYSTEM);
+                    systemAlert.setContent("[System] " + formattedName + " left the hideout.");
+
                     try {
-                        pendingDisconnectTasks.remove(uniqueUserKey);
-
-                        LogEntry systemAlert = new LogEntry();
-                        systemAlert.setType(LogType.SYSTEM);
-                        systemAlert.setContent("[System] " + pokemon + " left the hideout.");
-
-                        EnterSessionDTO context = new EnterSessionDTO(standardRoom, pokemon.trim());
+                        EnterSessionDTO context = new EnterSessionDTO(roomCode, formattedName);
                         logsService.saveItem(systemAlert, context);
 
-                        broadcastToRoom(standardRoom, new LogResponse(
+                        broadcastToRoom(roomCode, new LogResponse(
                                 null,
                                 systemAlert.getContent(),
-                                pokemon,
+                                formattedName,
                                 LocalDateTime.now(),
                                 LogType.SYSTEM.name()));
-
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }, 10, TimeUnit.SECONDS);
-
-                pendingDisconnectTasks.put(uniqueUserKey, disconnectTask);
+                }
             }
-        }
+        });
     }
 
     private void broadcastToRoom(String room, LogResponse payload) {
