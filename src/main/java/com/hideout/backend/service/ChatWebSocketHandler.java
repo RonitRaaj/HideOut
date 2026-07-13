@@ -33,7 +33,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final LogsService logsService;
     private final Map<String, List<WebSocketSession>> roomSessions = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    
+
     private final Map<String, ScheduledFuture<?>> pendingDisconnectTasks = new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper = new ObjectMapper()
@@ -42,34 +42,35 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         String room = (String) session.getAttributes().get("room");
-        String profileName = (String) session.getAttributes().get("pokemon");
+        String pokemon = (String) session.getAttributes().get("pokemon"); // Use 'pokemon' uniformly
 
-        if (room != null && profileName != null) {
+        if (room != null && pokemon != null) {
             String standardRoom = room.toUpperCase().trim();
-            String uniqueUserKey = standardRoom + ":" + profileName.toLowerCase().trim();
+            String uniqueUserKey = standardRoom + ":" + pokemon.toLowerCase().trim();
 
-            ScheduledFuture<?> scheduledTask = pendingDisconnectTasks.remove(uniqueUserKey);
+            java.util.concurrent.ScheduledFuture<?> scheduledTask = pendingDisconnectTasks.remove(uniqueUserKey);
             boolean isRefreshing = (scheduledTask != null);
 
             if (isRefreshing) {
                 scheduledTask.cancel(false);
-                System.out.println("🔄 User " + profileName + " refreshed. Intercepted and canceled exit alert.");
+                System.out.println("🔄 Intercepted and canceled exit alert for user: " + uniqueUserKey);
             }
 
-            roomSessions.computeIfAbsent(standardRoom, k -> new CopyOnWriteArrayList<>()).add(session);
+            roomSessions.computeIfAbsent(standardRoom, k -> new java.util.concurrent.CopyOnWriteArrayList<>())
+                    .add(session);
 
             if (!isRefreshing) {
                 LogEntry systemAlert = new LogEntry();
                 systemAlert.setType(LogType.SYSTEM);
-                systemAlert.setContent("[System] " + profileName + " joined the hideout.");
+                systemAlert.setContent("[System] " + pokemon + " joined the hideout.");
 
-                EnterSessionDTO context = new EnterSessionDTO(standardRoom, profileName.trim());
+                EnterSessionDTO context = new EnterSessionDTO(standardRoom, pokemon.trim());
                 logsService.saveItem(systemAlert, context);
 
                 broadcastToRoom(standardRoom, new LogResponse(
                         null,
                         systemAlert.getContent(),
-                        profileName,
+                        pokemon,
                         LocalDateTime.now(),
                         LogType.SYSTEM.name()));
             }
@@ -102,34 +103,33 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         String room = (String) session.getAttributes().get("room");
-        String profileName = (String) session.getAttributes().get("pokemon");
+        String pokemon = (String) session.getAttributes().get("pokemon");
 
-        if (room != null && profileName != null) {
+        if (room != null && pokemon != null) {
             String standardRoom = room.toUpperCase().trim();
-            String uniqueUserKey = standardRoom + ":" + profileName.toLowerCase().trim();
+            String uniqueUserKey = standardRoom + ":" + pokemon.toLowerCase().trim();
 
             if (roomSessions.containsKey(standardRoom)) {
                 roomSessions.get(standardRoom).remove(session);
 
-                ScheduledFuture<?> disconnectTask = scheduler.schedule(() -> {
+                java.util.concurrent.ScheduledFuture<?> disconnectTask = scheduler.schedule(() -> {
                     try {
-                       
                         pendingDisconnectTasks.remove(uniqueUserKey);
 
                         LogEntry systemAlert = new LogEntry();
                         systemAlert.setType(LogType.SYSTEM);
-                        systemAlert.setContent("[System] " + profileName + " left the hideout.");
+                        systemAlert.setContent("[System] " + pokemon + " left the hideout.");
 
-                        EnterSessionDTO context = new EnterSessionDTO(standardRoom, profileName.trim());
+                        EnterSessionDTO context = new EnterSessionDTO(standardRoom, pokemon.trim());
                         logsService.saveItem(systemAlert, context);
 
                         broadcastToRoom(standardRoom, new LogResponse(
                                 null,
                                 systemAlert.getContent(),
-                                profileName,
+                                pokemon,
                                 LocalDateTime.now(),
                                 LogType.SYSTEM.name()));
-                                
+
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
