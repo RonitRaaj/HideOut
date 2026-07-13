@@ -39,8 +39,7 @@ public class GeminiService {
         }
 
         String promptInstruction = "You are an AI assistant for a secure private messaging application named Hideout.\n\n"
-                +
-                "Your task is to summarize the following chat transcript recorded over the last " + hours
+                + "Your task is to summarize the following chat transcript recorded over the last " + hours
                 + " hours.\n\n" +
                 "Rules:\n" +
                 "- Be extremely brief, punchy, and sweet.\n" +
@@ -56,28 +55,51 @@ public class GeminiService {
                         Map.of("parts", List.of(
                                 Map.of("text", promptInstruction)))));
 
-        try {
-            String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key="
-                    + apiKey;
+        // 👇 UPDATED: Active production endpoints for resilient fallbacks
+        String[] models = {"gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"};
+        String apiResponseText = null;
+        Exception lastException = null;
 
-            Map<String, Object> apiResponse = restClient.post()
+        for (String model : models) {
+            try {
+                String apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+
+                System.out.println("Attempting AI summary with model: " + model);
+
+                Map<String, Object> apiResponse = restClient.post()
                     .uri(apiUrl)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(requestPayload)
                     .retrieve()
                     .body(Map.class);
 
-            List<?> candidates = (List<?>) apiResponse.get("candidates");
-            Map<?, ?> firstCandidate = (Map<?, ?>) candidates.get(0);
-            Map<?, ?> contentNode = (Map<?, ?>) firstCandidate.get("content");
-            List<?> partsList = (List<?>) contentNode.get("parts");
-            Map<?, ?> textPart = (Map<?, ?>) partsList.get(0);
+                List<?> candidates = (List<?>) apiResponse.get("candidates");
+                Map<?, ?> firstCandidate = (Map<?, ?>) candidates.get(0);
+                Map<?, ?> contentNode = (Map<?, ?>) firstCandidate.get("content");
+                List<?> partsList = (List<?>) contentNode.get("parts");
+                Map<?, ?> textPart = (Map<?, ?>) partsList.get(0);
 
-            return (String) textPart.get("text");
+                apiResponseText = (String) textPart.get("text");
+                
+                // Break immediately if a valid response is achieved
+                if (apiResponseText != null) {
+                    break; 
+                }
 
-        } catch (Exception e) {
-            e.printStackTrace();
-            return "⚠️ Error generating AI summary: " + e.getMessage();
+            } catch (Exception e) {
+                System.out.println("⚠️ Model " + model + " failed or overloaded. Trying next fallback...");
+                lastException = e; 
+            }
+        }
+
+        // Return parsed text or custom demand boundary message
+        if (apiResponseText != null) {
+            return apiResponseText;
+        } else {
+            if (lastException != null) {
+                lastException.printStackTrace();
+            }
+            return "⏰ The AI frequencies are totally jammed right now. Google is facing high demand. I am using free tier yk, Money issues. please try again in a few minutes, or don't. your wish ";
         }
     }
 }

@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -30,12 +31,10 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final LogsService logsService;
-
     private final Map<String, List<WebSocketSession>> roomSessions = new ConcurrentHashMap<>();
-
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-
-    private final Set<String> refreshingUsers = ConcurrentHashMap.newKeySet();
+    
+    private final Map<String, ScheduledFuture<?>> pendingDisconnectTasks = new ConcurrentHashMap<>();
 
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
@@ -49,10 +48,12 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             String standardRoom = room.toUpperCase().trim();
             String uniqueUserKey = standardRoom + ":" + profileName.toLowerCase().trim();
 
-            boolean isRefreshing = refreshingUsers.contains(uniqueUserKey);
+            ScheduledFuture<?> scheduledTask = pendingDisconnectTasks.remove(uniqueUserKey);
+            boolean isRefreshing = (scheduledTask != null);
 
             if (isRefreshing) {
-                refreshingUsers.remove(uniqueUserKey);
+                scheduledTask.cancel(false);
+                System.out.println("🔄 User " + profileName + " refreshed. Intercepted and canceled exit alert.");
             }
 
             roomSessions.computeIfAbsent(standardRoom, k -> new CopyOnWriteArrayList<>()).add(session);
@@ -110,31 +111,31 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if (roomSessions.containsKey(standardRoom)) {
                 roomSessions.get(standardRoom).remove(session);
 
-                refreshingUsers.add(uniqueUserKey);
-
-                scheduler.schedule(() -> {
+                ScheduledFuture<?> disconnectTask = scheduler.schedule(() -> {
                     try {
-                        if (refreshingUsers.contains(uniqueUserKey)) {
-                            refreshingUsers.remove(uniqueUserKey);
+                       
+                        pendingDisconnectTasks.remove(uniqueUserKey);
 
-                            LogEntry systemAlert = new LogEntry();
-                            systemAlert.setType(LogType.SYSTEM);
-                            systemAlert.setContent("[System] " + profileName + " left the hideout.");
+                        LogEntry systemAlert = new LogEntry();
+                        systemAlert.setType(LogType.SYSTEM);
+                        systemAlert.setContent("[System] " + profileName + " left the hideout.");
 
-                            EnterSessionDTO context = new EnterSessionDTO(standardRoom, profileName.trim());
-                            logsService.saveItem(systemAlert, context);
+                        EnterSessionDTO context = new EnterSessionDTO(standardRoom, profileName.trim());
+                        logsService.saveItem(systemAlert, context);
 
-                            broadcastToRoom(standardRoom, new LogResponse(
-                                    null,
-                                    systemAlert.getContent(),
-                                    profileName,
-                                    LocalDateTime.now(),
-                                    LogType.SYSTEM.name()));
-                        }
+                        broadcastToRoom(standardRoom, new LogResponse(
+                                null,
+                                systemAlert.getContent(),
+                                profileName,
+                                LocalDateTime.now(),
+                                LogType.SYSTEM.name()));
+                                
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
                 }, 10, TimeUnit.SECONDS);
+
+                pendingDisconnectTasks.put(uniqueUserKey, disconnectTask);
             }
         }
     }
